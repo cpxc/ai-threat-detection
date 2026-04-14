@@ -21,13 +21,21 @@ def load_models():
     le = joblib.load('label_encoder.pkl')
     return rf, scaler, le
 
+@st.cache_resource
+def load_live_models():
+    rf = joblib.load('rf_live_model.pkl')
+    sc = joblib.load('scaler_live.pkl')
+    le = joblib.load('le_live.pkl')
+    return rf, sc, le
+
 rf_model, scaler, le = load_models()
 
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Select Page", [
     "Dashboard",
     "Threat Analysis",
-    "Model Comparison"
+    "Model Comparison",
+    "Live Network Analysis"
 ])
 
 if page == "Dashboard":
@@ -61,6 +69,8 @@ elif page == "Threat Analysis":
 
         if 'Label' in df.columns:
             df = df.drop('Label', axis=1)
+        if 'Label_encoded' in df.columns:
+            df = df.drop('Label_encoded', axis=1)
 
         st.success(f"Loaded {len(df)} records")
 
@@ -104,3 +114,46 @@ elif page == "Model Comparison":
                           y=[0.97, 0.97, 0.77]))
     fig3.update_layout(barmode='group', title='Model Comparison')
     st.plotly_chart(fig3, use_container_width=True)
+
+elif page == "Live Network Analysis":
+    st.header("Live Network Traffic Analysis")
+    st.info("Upload live traffic captured from your network using nfstream")
+
+    rf_live, scaler_live, le_live = load_live_models()
+
+    uploaded_live = st.file_uploader("Upload live_traffic.csv", type=['csv'])
+
+    if uploaded_live:
+        df_live = pd.read_csv(uploaded_live)
+        st.success(f"Loaded {len(df_live)} live flows")
+
+        features = [
+            'bidirectional_duration_ms', 'bidirectional_packets',
+            'bidirectional_bytes', 'src2dst_packets', 'src2dst_bytes',
+            'dst2src_packets', 'dst2src_bytes', 'dst_port'
+        ]
+
+        try:
+            X_live = df_live[features].fillna(0)
+            X_scaled = scaler_live.transform(X_live)
+            preds = rf_live.predict(X_scaled)
+            pred_labels = le_live.inverse_transform(preds)
+            df_live['Prediction'] = pred_labels
+
+            attacks = df_live[df_live['Prediction'] != 'BENIGN']
+            benign = df_live[df_live['Prediction'] == 'BENIGN']
+
+            col1, col2 = st.columns(2)
+            col1.error(f"Threats: {len(attacks)}")
+            col2.success(f"Benign: {len(benign)}")
+
+            fig4 = px.pie(df_live, names='Prediction',
+                          title='Live Traffic Classification')
+            st.plotly_chart(fig4, use_container_width=True)
+
+            if len(attacks) > 0:
+                st.subheader("Detected Threats")
+                st.dataframe(attacks[['src_ip', 'dst_ip', 'dst_port', 'Prediction']].head(20))
+
+        except Exception as e:
+            st.error(f"Error: {e}")
